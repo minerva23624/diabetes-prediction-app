@@ -26,16 +26,13 @@ st.set_page_config(
 )
 
 st.title("🩺 Diabetes Prediction using Machine Learning")
-st.markdown("**Essai patient interactif & Comparaison de modèles ML**")
+st.markdown("**Essai patient interactif avec 3 modèles & Comparaison de modèles ML**")
 
 # =========================================================
 # LOAD DATA
 # =========================================================
 @st.cache_data
 def load_data():
-    """
-    Charge le dataset Pima Indians Diabetes depuis GitHub.
-    """
     url = "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
     cols = [
         "Pregnancies","Glucose","BloodPressure","SkinThickness",
@@ -50,16 +47,13 @@ y = data["Outcome"]
 # =========================================================
 # TRAIN / TEST SPLIT + SMOTE + SCALER
 # =========================================================
-# Split train/test avec stratification
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.25, random_state=42, stratify=y
 )
 
-# SMOTE pour équilibrer les classes
 smote = SMOTE(random_state=42)
 X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
 
-# Standardisation des données
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train_res)
 X_test_scaled = scaler.transform(X_test)
@@ -74,22 +68,25 @@ mode = st.sidebar.radio(
 )
 
 # =========================================================
-# MODE 1 : PATIENT TEST (SVM optimisé)
+# MODE 1 : ESSAI PATIENT (3 modèles + bilan)
 # =========================================================
 if mode == "Essai Patient":
 
-    st.subheader("🧪 Essai Patient - SVM optimisé")
+    st.subheader("🧪 Essai Patient - Moyenne de 3 modèles")
 
-    # -------------------------
-    # 5. Optimisation SVM
-    # -------------------------
+    # --------- Initialisation des modèles ---------
+    lr_model = LogisticRegression(max_iter=1000, class_weight="balanced")
+    lr_model.fit(X_train_scaled, y_train_res)
+
+    rf_model = RandomForestClassifier(class_weight="balanced", random_state=42)
+    rf_model.fit(X_train_scaled, y_train_res)
+
     param_grid = {
         'C': [0.1, 1, 10, 50],
         'gamma': [0.001, 0.01, 0.1, 'scale'],
         'kernel': ['rbf'],
         'class_weight': ['balanced']
     }
-
     grid = GridSearchCV(
         SVC(probability=True, random_state=42),
         param_grid,
@@ -98,54 +95,65 @@ if mode == "Essai Patient":
         n_jobs=-1
     )
     grid.fit(X_train_scaled, y_train_res)
-
-    # Meilleur modèle
     svm_model = grid.best_estimator_
 
-    # -------------------------
-    # Formulaire patient
-    # -------------------------
+    # --------- Formulaire patient ---------
     with st.form("patient_form"):
+        patient_name = st.text_input("Nom du patient", "")
         c1, c2 = st.columns(2)
-
         with c1:
             preg = st.number_input("Pregnancies", 0, 20, 1)
             glu = st.number_input("Glucose", 50, 250, 120)
             bp = st.number_input("Blood Pressure", 40, 150, 70)
             skin = st.number_input("Skin Thickness", 5, 100, 20)
-
         with c2:
             ins = st.number_input("Insulin", 0, 900, 80)
             bmi = st.number_input("BMI", 10.0, 60.0, 25.0)
             dpf = st.number_input("Diabetes Pedigree Function", 0.0, 3.0, 0.5)
             age = st.number_input("Age", 10, 100, 30)
-
         submit = st.form_submit_button("🔮 Prédire")
 
     if submit:
-        # Création du vecteur patient
-        patient = np.array([[preg, glu, bp, skin, ins, bmi, dpf, age]])
-        patient_scaled = scaler.transform(patient)
-
-        # Prédiction
-        pred = svm_model.predict(patient_scaled)[0]
-        prob = svm_model.predict_proba(patient_scaled)[0][1]
-
-        st.divider()
-        if pred == 1:
-            st.error("⚠️ Risque élevé de diabète")
+        if not patient_name:
+            st.warning("Veuillez entrer le nom du patient avant de prédire.")
         else:
-            st.success("✅ Risque faible de diabète")
+            patient = np.array([[preg, glu, bp, skin, ins, bmi, dpf, age]])
+            patient_scaled = scaler.transform(patient)
 
-        st.metric("Probabilité estimée", f"{prob*100:.2f}%")
+            # --------- Prédictions des 3 modèles ---------
+            prob_lr = lr_model.predict_proba(patient_scaled)[0][1]
+            prob_rf = rf_model.predict_proba(patient_scaled)[0][1]
+            prob_svm = svm_model.predict_proba(patient_scaled)[0][1]
 
-        st.warning(
-            "Cette application est un outil d’aide à la décision "
-            "et ne remplace pas un diagnostic médical."
-        )
+            # --------- Moyenne des probabilités ---------
+            prob_mean = (prob_lr + prob_rf + prob_svm) / 3
+            pred_mean = 1 if prob_mean >= 0.5 else 0
+
+            # --------- Affichage du bilan ---------
+            st.divider()
+            st.subheader(f"📋 Bilan du patient : {patient_name}")
+            
+            st.write(f"**Paramètres entrés :**")
+            st.write(f"- Pregnancies : {preg}")
+            st.write(f"- Glucose : {glu}")
+            st.write(f"- Blood Pressure : {bp}")
+            st.write(f"- Skin Thickness : {skin}")
+            st.write(f"- Insulin : {ins}")
+            st.write(f"- BMI : {bmi}")
+            st.write(f"- Diabetes Pedigree Function : {dpf}")
+            st.write(f"- Age : {age}")
+
+            st.write("---")
+            if pred_mean == 1:
+                st.error("⚠️ Risque élevé de diabète (moyenne des 3 modèles)")
+            else:
+                st.success("✅ Risque faible de diabète (moyenne des 3 modèles)")
+
+            st.metric("Probabilité moyenne estimée", f"{prob_mean*100:.2f}%")
+            st.warning("Cette application est un outil d’aide à la décision et ne remplace pas un diagnostic médical.")
 
 # =========================================================
-# MODE 2 : MODEL COMPARISON
+# MODE 2 : COMPARAISON DES MODÈLES
 # =========================================================
 else:
 
@@ -156,53 +164,32 @@ else:
         ["Logistic Regression", "Random Forest", "SVM"]
     )
 
-    # -------------------------
-    # Sélection du modèle
-    # -------------------------
+    # --------- Sélection du modèle ---------
     if model_name == "Logistic Regression":
         C = st.sidebar.slider("C", 0.01, 10.0, 1.0)
-        model = LogisticRegression(
-            C=C, max_iter=1000, class_weight="balanced"
-        )
-
+        model = LogisticRegression(C=C, max_iter=1000, class_weight="balanced")
     elif model_name == "Random Forest":
         n_estimators = st.sidebar.slider("n_estimators", 50, 300, 100)
         max_depth = st.sidebar.slider("max_depth", 2, 20, 6)
-        model = RandomForestClassifier(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            class_weight="balanced",
-            random_state=42
-        )
-
+        model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, class_weight="balanced", random_state=42)
     else:
         C = st.sidebar.slider("C", 0.01, 10.0, 1.0)
         kernel = st.sidebar.selectbox("Kernel", ["linear", "rbf"])
-        model = SVC(
-            C=C, kernel=kernel,
-            probability=True,
-            class_weight="balanced"
-        )
+        model = SVC(C=C, kernel=kernel, probability=True, class_weight="balanced")
 
-    # -------------------------
-    # Entraînement & prédiction
-    # -------------------------
+    # --------- Entraînement & prédiction ---------
     model.fit(X_train_scaled, y_train_res)
     y_pred = model.predict(X_test_scaled)
     y_prob = model.predict_proba(X_test_scaled)[:, 1]
 
     col1, col2 = st.columns(2)
 
-    # -------------------------
-    # Classification Report
-    # -------------------------
+    # --------- Classification Report ---------
     with col1:
         st.subheader("📄 Classification Report")
         st.text(classification_report(y_test, y_pred))
 
-    # -------------------------
-    # Confusion Matrix
-    # -------------------------
+    # --------- Confusion Matrix ---------
     with col2:
         st.subheader("🔲 Confusion Matrix")
         cm = confusion_matrix(y_test, y_pred)
@@ -212,13 +199,10 @@ else:
         ax.set_ylabel("Actual")
         st.pyplot(fig)
 
-    # -------------------------
-    # ROC Curve
-    # -------------------------
+    # --------- ROC Curve ---------
     st.subheader("📈 ROC Curve")
     fpr, tpr, _ = roc_curve(y_test, y_prob)
     roc_auc = auc(fpr, tpr)
-
     fig2, ax2 = plt.subplots()
     ax2.plot(fpr, tpr, label=f"AUC = {roc_auc:.2f}")
     ax2.plot([0,1],[0,1],'--')
